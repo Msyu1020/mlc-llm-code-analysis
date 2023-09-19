@@ -9,6 +9,9 @@ from tvm.relax.testing import nn
 from tvm.runtime.ndarray import array as tvm_array
 
 
+# 封装一个ModuleList容器,可以包含多个nn.Module子模块。
+# 注意这里的nn.Module是relax内部定义的类似PyTorch的nn.Module
+# 但是现在nn.Module操作的对象不是Tensor而是relax.Expr
 class ModuleList(nn.Module):
     def __init__(self, modules: List[nn.Module]):
         self.modules = modules
@@ -27,7 +30,7 @@ class ModuleList(nn.Module):
             x = module(x)
         return x
 
-
+# 基于 relax.Expr 搭建一个 Linear 层，类似于 PyTorch 的 Linear
 class Linear(nn.Module):
     def __init__(
         self,
@@ -63,7 +66,8 @@ class Linear(nn.Module):
             x = nn.emit(x + self.bias)
         return x
 
-
+# 同样，基于 Relax.Expr 搭建一个 Embedding 层，类似于 PyTorch 的 Embedding
+# take op的定义在：https://github.com/mlc-ai/relax/blob/ceaf7b0156524d30537a3de5fa30764eaff4edb8/python/tvm/relax/op/index.py#L28
 class Embedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, dtype):
         self.num_embeddings = num_embeddings
@@ -83,6 +87,7 @@ class Embedding(nn.Module):
         return nn.emit(reshape(embedding, [*x_shape, emb_size]))
 
 
+# 同样，基于 Relax.Expr 搭建一个 LayerNorm 层
 class LayerNorm(nn.Module):
     def __init__(
         self,
@@ -110,6 +115,7 @@ class LayerNorm(nn.Module):
         return x
 
 
+# 同样，基于 Relax.Expr 搭建一个 RotaryEmbedding 层，类似于 PyTorch 的 RotaryEmbedding
 class RotaryEmbedding(nn.Module):
     def __init__(
         self,
@@ -223,7 +229,7 @@ class RotaryEmbedding(nn.Module):
         )
         return q_embed, k_embed
 
-
+# 把 Image 转换为 relay.Expr，类似 PyTorch 的将图片转换为 Tensor，需要考虑到减均值，除方差
 class TransformImage(nn.Module):
     def __init__(self, dtype: str, in_chans: int = 4):
         self.in_chans = in_chans
@@ -264,7 +270,7 @@ class TransformImage(nn.Module):
 
         return res
 
-
+# 类似于 PyTorch ，找出 ralay 构造的 nn.Module 里面的 named_parameters
 def named_parameters(model: nn.Module) -> Dict[str, nn.Parameter]:
     params: Dict[str, nn.Parameter] = {}
     for name, module in model.__dict__.items():
