@@ -598,20 +598,24 @@ class RWKVForCausalLM(nn.Module):
 
         return logits, key_value_cache
 
-
+# 该代码定义了一个函数get_param_quant_kind，用于根据参数名称和参数信息确定参数的量化类型。
 def get_param_quant_kind(
     name: str, param_info: relax.TensorStructInfo
 ) -> ParamQuantKind:
+    # 如果参数名称以"embeddings.weight"结尾，返回ParamQuantKind.embedding_table表示该参数是嵌入表的权重。
     if name.endswith("embeddings.weight"):
         return ParamQuantKind.embedding_table
+    # 如果参数名称为"head.weight"，返回ParamQuantKind.final_fc_weight表示该参数是最后一个全连接层的权重。
     elif name == "head.weight":
         return ParamQuantKind.final_fc_weight
+    # 如果参数的维度为2且名称以".weight"结尾，返回ParamQuantKind.linear_weight表示该参数是线性层的权重。
     elif param_info.ndim == 2 and name.endswith(".weight"):
         return ParamQuantKind.linear_weight
     else:
         return ParamQuantKind.others
 
-
+# 函数接受一个relax.BlockBuilder对象bb、一个ParamManager对象param_manager、一个RWKVConfig对象config、
+# 一个QuantizationScheme对象quant_scheme和一个字符串类型的函数名称func_name（默认为"prefill"或"decode"）
 def create_func(
     bb: relax.BlockBuilder,
     param_manager: ParamManager,
@@ -619,33 +623,47 @@ def create_func(
     quant_scheme: QuantizationScheme,
     func_name=Literal["prefill", "decode"],
 ):
+    # 如果函数名称不是"prefill"或"decode"，则抛出ValueError异常。
     if func_name not in ["prefill", "decode"]:
         raise ValueError(f"func_name must be 'prefill' or 'decode', got {func_name}")
+    # 根据函数名称确定序列的长度seq_len，如果函数名称为"decode"，则将序列长度设为1，否则设为tir.Var("n", "int64")。
     seq_len = 1 if func_name == "decode" else tir.Var("n", "int64")
 
+    # 在BlockBuilder的function上下文中创建函数func_name。
     with bb.function(func_name):
+        # 创建一个RWKVForCausalLM模型对象model。
         model = RWKVForCausalLM(config)
+        # 调用param_manager的register_params方法注册模型参数。
         param_manager.register_params(
             model, func_name, quant_scheme, get_param_quant_kind
         )
 
+        # 创建一个输入占位符input_ids，形状为(1, seq_len)，数据类型为"int32"。
         input_ids = nn.Placeholder((1, seq_len), dtype="int32", name="input_ids")
         # Placeholder for compatibility to LLAMA
+        # 创建一个占位符all_seq_len_shape，用于兼容LLAMA。
         all_seq_len_shape = relax.Var("place_holder", R.Object())
+        # 创建一个变量state，其值为包含多个R.Object()的元组，长度为config.num_hidden_layers * 5。
         state = relax.Var("state", R.Tuple([R.Object()] * config.num_hidden_layers * 5))
         with bb.dataflow():
+            # 调用model的前向传播函数，将input_ids和state作为输入，得到输出logits和状态列表states。
             logits, states = model(input_ids, state)
+            # 将input_ids、all_seq_len_shape、state和模型的参数列表作为参数列表params。
             params = [
                 input_ids,
                 all_seq_len_shape,
                 state,
             ] + model.parameters()
 
+            # 使用bb.emit_output将(logits, relax.Tuple(states))作为输出。
             gv = bb.emit_output((logits, relax.Tuple(states)))
+        # 使用bb.emit_func_output将输出和参数列表params作为函数的输出。
         bb.emit_func_output(gv, params)
 
+    # 获取构建好的模块mod和global function变量gv。
     mod = bb.get()
     gv = mod.get_global_var(func_name)
+    # 根据函数名称更新函数的属性，包括输入数量和tir_var_upper_bound（如果函数名称为"prefill"）。
     f = mod[gv].with_attr("num_input", 3)
     if func_name == "prefill":
         f = f.with_attr("tir_var_upper_bound", {"n": config.max_sequence_length})
@@ -720,21 +738,28 @@ def create_softmax_func(bb: relax.BlockBuilder, config: RWKVConfig) -> None:
             gv = bb.emit_output(softmax)
         bb.emit_func_output(gv, [logits, temperature])
 
-
+# 定义了一个名为get_model的函数，接受两个参数：args和hf_config。
 def get_model(args, hf_config):
+    # 从args中获取模型名称、最大序列长度和模型数据类型。
     model_name = args.model
     max_seq_len = args.max_seq_len
     dtype = args.quantization.model_dtype
 
+    # 检查模型名称是否以"rwkv-"开头，如果不是，则抛出ValueError异常。
     if not model_name.lower().startswith("rwkv-"):
         raise ValueError(f"Unsupported model name: {model_name}")
 
+    # 使用hf_config和dtype创建一个RWKVConfig配置对象config。
     config = RWKVConfig(**hf_config, dtype=dtype)
+    # 如果指定了最大序列长度max_seq_len，则将config的max_sequence_length属性设置为max_seq_len。
     if max_seq_len != -1:
         config.max_sequence_length = max_seq_len
 
+    # 创建一个ParamManager对象param_manager用于管理模型参数，以及一个relax.BlockBuilder对象bb用于构建计算图。
     param_manager = ParamManager()
     bb = relax.BlockBuilder()
+    # 调用一系列create_func函数，向bb中添加计算图的构建指令，
+    # 包括"prefill"和"decode"两个函数、KV Cache函数、softmax函数和元数据函数。
     create_func(bb, param_manager, config, args.quantization, "prefill")
     create_func(bb, param_manager, config, args.quantization, "decode")
     create_kv_cache_func(bb, config)
@@ -748,11 +773,14 @@ def get_model(args, hf_config):
         add_prefix_space=False,
     )
     create_kv_cache_reset_func(bb, config)
+    # 通过调用bb的get方法获取构建好的模块mod。
     mod = bb.get()
 
+    # 如果args.build_model_only为True，则直接返回模块mod、参数管理器param_manager、None和配置config。
     if args.build_model_only:
         return mod, param_manager, None, config
 
+    # 定义一个名为f_convert_pname_fwd的函数，用于转换前向参数名称。
     def f_convert_pname_fwd(pname: str) -> List[str]:
         if (
             "key_weight" in pname
@@ -764,7 +792,8 @@ def get_model(args, hf_config):
             return [pname.replace("_weight", ".weight")]
         else:
             return [pname]
-
+    
+    # 定义一个名为f_convert_param_bkwd的函数，用于转换反向参数。
     def f_convert_param_bkwd(torch_pname: str, torch_param):
         # torch_param: numpy.ndarray
         import numpy as np  # pylint: disable=import-outside-toplevel
@@ -791,7 +820,9 @@ def get_model(args, hf_config):
         else:
             return [(torch_pname, torch_param.astype(config.dtype))]
 
+    # 调用param_manager的set_param_loading_func方法，设置参数加载函数。
     param_manager.set_param_loading_func(
         args.model_path, args.use_safetensors, f_convert_pname_fwd, f_convert_param_bkwd
     )
+    # 返回模块mod、参数管理器param_manager、长度为参数数量的None列表和配置config。
     return mod, param_manager, [None] * len(param_manager.param_names), config
