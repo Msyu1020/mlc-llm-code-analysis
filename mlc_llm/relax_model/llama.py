@@ -79,13 +79,14 @@ class Linear(nn.Module):
         return nn.emit(relax.op.linear(input, self.weight, self.bias))
 
 
+# 嵌入模块
 class Embedding(nn.Module):
     def __init__(self, num_embeddings, embedding_dim, dtype: str):
-        self.num_embeddings = num_embeddings
-        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings  # 嵌入的类别 （比如一共有 n 个 token）
+        self.embedding_dim = embedding_dim    # 每个 embedding 的维度
         self.weight = nn.Parameter(
             (num_embeddings, embedding_dim), dtype=dtype, name="embedding_weight"
-        )
+        )  # 记录每个 token 的 embedding
 
     def forward(self, x: relax.Expr) -> relax.Var:
         from tvm.relax.op import reshape, take
@@ -95,9 +96,9 @@ class Embedding(nn.Module):
             return nn.emit(take(self.weight, x, axis=0))
         else:
             x_shape = x.struct_info.shape.values
-            emb_size = self.weight.struct_info.shape.values[-1]
-            x = nn.emit(reshape(x, shape=[-1]))
-            embedding = nn.emit(take(self.weight, x, axis=0))
+            emb_size = self.weight.struct_info.shape.values[-1] # 得到每个 embedding 的大小
+            x = nn.emit(reshape(x, shape=[-1])) # 将 x 展平成一维
+            embedding = nn.emit(take(self.weight, x, axis=0)) # 嵌入，将 seq 向量化
             return nn.emit(reshape(embedding, [*x_shape, emb_size]))
 
 
